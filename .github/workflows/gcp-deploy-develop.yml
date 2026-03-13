@@ -98,7 +98,15 @@ jobs:
           if [ ! -f Dockerfile ] && [ -f dockerfile ]; then
             cp dockerfile Dockerfile
           fi
-          BUILD_ID=$(gcloud builds submit --tag "$IMAGE" . --async --format='value(metadata.build.id)')
+          BUILD_OP=$(gcloud builds submit --tag "$IMAGE" . --async --format='value(name)')
+          BUILD_ID="${BUILD_OP##*/}"
+
+          if [ -z "$BUILD_ID" ]; then
+            echo "Failed to determine Cloud Build ID from operation: $BUILD_OP"
+            exit 1
+          fi
+
+          echo "Cloud Build operation: $BUILD_OP"
           echo "Cloud Build ID: $BUILD_ID"
 
           while true; do
