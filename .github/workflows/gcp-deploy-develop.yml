@@ -98,7 +98,7 @@ jobs:
           if [ ! -f Dockerfile ] && [ -f dockerfile ]; then
             cp dockerfile Dockerfile
           fi
-          gcloud builds submit --tag "$IMAGE" .
+          gcloud builds submit --tag "$IMAGE" . --suppress-logs
 
       - name: Deploy to Cloud Run (develop)
         env:
