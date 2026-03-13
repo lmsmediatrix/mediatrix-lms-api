@@ -1,0 +1,138 @@
+name: Deploy Backend to Cloud Run (Develop)
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: gcp-deploy-lms-api-develop
+  cancel-in-progress: true
+
+env:
+  PROJECT_ID: alma-490104
+  REGION: asia-southeast1
+  SERVICE_NAME: lms-api-develop
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/763972588311/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions-deploy-develop@alma-490104.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure gcloud project
+        run: gcloud config set project "$PROJECT_ID"
+
+      - name: Verify GCP access
+        run: gcloud auth list
+
+      - name: Build backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Prepare .env.develop
+        run: |
+          if [ -n "${{ secrets.ENV_DEVELOP_FILE }}" ]; then
+            printf "%s" "${{ secrets.ENV_DEVELOP_FILE }}" > .env.develop
+            echo ".env.develop created from GitHub secret ENV_DEVELOP_FILE"
+          elif [ ! -f .env.develop ]; then
+            echo "WARN: .env.develop not found and ENV_DEVELOP_FILE is empty. Creating minimal file."
+            cat > .env.develop <<'EOF'
+            NODE_ENV=production
+            REDIS_ENABLED=false
+            EOF
+          else
+            echo "Using repository .env.develop"
+          fi
+
+      - name: Convert .env.develop to Cloud Run env file
+        run: |
+          echo "Converting .env.develop to env.yaml..."
+          : > env.yaml
+
+          RESERVED_VARS="PORT K_SERVICE K_REVISION K_CONFIGURATION"
+
+          while IFS='=' read -r key value || [ -n "$key" ]; do
+            [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+
+            key=$(echo "$key" | xargs)
+
+            if echo "$RESERVED_VARS" | grep -qw "$key"; then
+              echo "Skipping reserved variable: $key"
+              continue
+            fi
+
+            value=$(echo "${value:-}" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+            value=$(echo "$value" | sed 's/^"//' | sed 's/"$//')
+            value=$(echo "$value" | sed "s/'//g")
+
+            [[ -z "$value" ]] && continue
+
+            escaped_value=$(printf '%s' "$value" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+            echo "${key}: \"${escaped_value}\"" >> env.yaml
+          done < .env.develop
+
+          echo "env.yaml created successfully"
+
+      - name: Deploy to Cloud Run (develop)
+        run: |
+          gcloud run deploy "$SERVICE_NAME" \
+            --source . \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --platform managed \
+            --allow-unauthenticated \
+            --env-vars-file env.yaml \
+            --port 8080 \
+            --quiet
+
+      - name: Get service URL
+        run: |
+          SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format 'value(status.url)')
+          echo "Service deployed to: $SERVICE_URL"
+          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+
+      - name: Health check with retries
+        run: |
+          set +e
+          max_attempts=10
+          attempt=1
+
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "Health check attempt $attempt of $max_attempts..."
+            http_code=$(curl -s -o /tmp/health.txt -w "%{http_code}" "$SERVICE_URL/health")
+
+            if [ "$http_code" = "200" ]; then
+              echo "OK: Service is healthy"
+              cat /tmp/health.txt
+              exit 0
+            fi
+
+            echo "WARN: Received HTTP $http_code"
+
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              sleep 15
+            fi
+
+            attempt=$((attempt + 1))
+          done
+
+          echo "ERROR: Service failed health check"
+          exit 1
