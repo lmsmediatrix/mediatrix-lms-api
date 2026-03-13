@@ -54,10 +54,10 @@ jobs:
             echo ".env.develop created from GitHub secret ENV_DEVELOP_FILE"
           elif [ ! -f .env.develop ]; then
             echo "WARN: .env.develop not found and ENV_DEVELOP_FILE is empty. Creating minimal file."
-            cat > .env.develop <<'EOF'
-            NODE_ENV=production
-            REDIS_ENABLED=false
-            EOF
+            {
+              echo "NODE_ENV=production"
+              echo "REDIS_ENABLED=false"
+            } > .env.develop
           else
             echo "Using repository .env.develop"
           fi
