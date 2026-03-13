@@ -95,6 +95,9 @@ jobs:
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:${{ github.sha }}
         run: |
+          if [ ! -f Dockerfile ] && [ -f dockerfile ]; then
+            cp dockerfile Dockerfile
+          fi
           gcloud builds submit --tag "$IMAGE" .
 
       - name: Deploy to Cloud Run (develop)
