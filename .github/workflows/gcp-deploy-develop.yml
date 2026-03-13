@@ -98,7 +98,25 @@ jobs:
           if [ ! -f Dockerfile ] && [ -f dockerfile ]; then
             cp dockerfile Dockerfile
           fi
-          gcloud builds submit --tag "$IMAGE" . --suppress-logs
+          BUILD_ID=$(gcloud builds submit --tag "$IMAGE" . --async --format='value(metadata.build.id)')
+          echo "Cloud Build ID: $BUILD_ID"
+
+          while true; do
+            STATUS=$(gcloud builds describe "$BUILD_ID" --format='value(status)')
+            echo "Build status: $STATUS"
+
+            if [ "$STATUS" = "SUCCESS" ]; then
+              break
+            fi
+
+            if [ "$STATUS" = "FAILURE" ] || [ "$STATUS" = "INTERNAL_ERROR" ] || [ "$STATUS" = "CANCELLED" ] || [ "$STATUS" = "TIMEOUT" ] || [ "$STATUS" = "EXPIRED" ]; then
+              echo "Build failed with status: $STATUS"
+              echo "Build logs: https://console.cloud.google.com/cloud-build/builds/$BUILD_ID?project=$PROJECT_ID"
+              exit 1
+            fi
+
+            sleep 10
+          done
 
       - name: Deploy to Cloud Run (develop)
         env:
