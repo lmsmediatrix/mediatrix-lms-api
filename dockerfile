@@ -1,23 +1,20 @@
-# Use Node.js 20 as the base image
-FROM node:20
-
-# Set the working directory inside the container
+FROM node:20-bookworm-slim AS deps
 WORKDIR /app
-
-# Copy package files first for better caching
 COPY package*.json ./
+RUN npm ci
 
-# Install dependencies
-RUN npm install
-
-# Copy the rest of the application
+FROM node:20-bookworm-slim AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+RUN npm run build && npm prune --omit=dev
 
-# Build the application
-RUN npm run build
-
-# Expose the port your app runs on
-EXPOSE ${PORT}
-
-# Start the compiled app
+FROM node:20-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=5000
+COPY package*.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+EXPOSE 5000
 CMD ["npm", "run", "start"]
