@@ -218,7 +218,9 @@ export const config = {
         origin,
         callback,
         "https://lms-app-dev-1f189.web.app",
-        "https://lms-app-dev.site"
+        "https://lms-app-dev.site",
+        "https://mediatrix-lms-app-dev.web.app",
+        "https://mediatrix-lms-app-dev.firebaseapp.com"
       );
     },
     TEST_SITE: function (origin: string, callback: CallbackFunction) {
