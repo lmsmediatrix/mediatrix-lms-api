@@ -1531,14 +1531,32 @@ export const FACET = (filter: any) => {
                   _id: 1,
                   createdAt: 1,
                   isNewThisMonth: {
-                    $gte: [
-                      "$createdAt",
+                    $and: [
                       {
-                        $dateFromParts: {
-                          year: { $year: "$$NOW" },
-                          month: { $month: "$$NOW" },
-                          day: 1,
-                        },
+                        $gte: [
+                          "$createdAt",
+                          filter.date
+                            ? new Date(
+                                new Date(filter.date).getFullYear(),
+                                new Date(filter.date).getMonth(),
+                                1,
+                              )
+                            : {
+                                $dateFromParts: {
+                                  year: { $year: "$$NOW" },
+                                  month: { $month: "$$NOW" },
+                                  day: 1,
+                                },
+                              },
+                        ],
+                      },
+                      {
+                        $lte: [
+                          "$createdAt",
+                          filter.date
+                            ? new Date(new Date(filter.date).setHours(23, 59, 59, 999))
+                            : "$$NOW",
+                        ],
                       },
                     ],
                   },
@@ -1617,6 +1635,24 @@ export const FACET = (filter: any) => {
                       { $eq: ["$sectionId", "$$sectionId"] },
                       { $ne: ["$archive.status", true] },
                       { $in: ["$status", ["submitted", "late"]] },
+                      // Exclude records already scored (status not updated after grading)
+                      { $not: { $gt: [{ $ifNull: ["$percentage", 0] }, 0] } },
+                      ...(filter.date
+                        ? [
+                            {
+                              $lte: [
+                                {
+                                  $cond: [
+                                    { $eq: [{ $type: "$submittedAt" }, "date"] },
+                                    "$submittedAt",
+                                    { $toDate: { $ifNull: ["$submittedAt", new Date(0)] } },
+                                  ],
+                                },
+                                new Date(new Date(filter.date).setHours(23, 59, 59, 999)),
+                              ],
+                            },
+                          ]
+                        : []),
                     ],
                   },
                 },
@@ -1718,7 +1754,14 @@ export const FACET = (filter: any) => {
                         {
                           $and: [
                             { $eq: ["$status", "pending"] },
-                            { $lt: ["$endDateNorm", "$$NOW"] },
+                            {
+                              $lt: [
+                                "$endDateNorm",
+                                filter.date
+                                  ? new Date(new Date(filter.date).setHours(23, 59, 59, 999))
+                                  : "$$NOW",
+                              ],
+                            },
                           ],
                         },
                         1,
@@ -1783,6 +1826,22 @@ export const FACET = (filter: any) => {
                       { $eq: ["$sectionId", "$$sectionId"] },
                       { $ne: ["$archive.status", true] },
                       { $in: ["$status", ["graded", "returned"]] },
+                      ...(filter.date
+                        ? [
+                            {
+                              $lte: [
+                                {
+                                  $cond: [
+                                    { $eq: [{ $type: "$gradedAt" }, "date"] },
+                                    "$gradedAt",
+                                    { $toDate: { $ifNull: ["$gradedAt", new Date(0)] } },
+                                  ],
+                                },
+                                new Date(new Date(filter.date).setHours(23, 59, 59, 999)),
+                              ],
+                            },
+                          ]
+                        : []),
                     ],
                   },
                 },
@@ -1892,9 +1951,23 @@ export const FACET = (filter: any) => {
               {
                 $match: {
                   $expr: {
-                    $gte: [
-                      "$submittedAtNorm",
-                      { $dateSubtract: { startDate: "$$NOW", unit: "day", amount: 6 } },
+                    $and: [
+                      {
+                        $gte: [
+                          "$submittedAtNorm",
+                          filter.date
+                            ? new Date(new Date(new Date(filter.date).setHours(0, 0, 0, 0)).getTime() - 6 * 24 * 60 * 60 * 1000)
+                            : { $dateSubtract: { startDate: "$$NOW", unit: "day", amount: 6 } },
+                        ],
+                      },
+                      {
+                        $lte: [
+                          "$submittedAtNorm",
+                          filter.date
+                            ? new Date(new Date(filter.date).setHours(23, 59, 59, 999))
+                            : "$$NOW",
+                        ],
+                      },
                     ],
                   },
                 },
@@ -1921,6 +1994,182 @@ export const FACET = (filter: any) => {
         },
         { $project: { _id: 0, days: 1 } },
       ] as PipelineStage.FacetPipelineStage[],
+
+      // --- Instructor Grading Queue List (detailed submissions) ---
+      gradingQueueList: [
+        {
+          $match: {
+            instructor: new mongoose.Types.ObjectId(filter.instructorId),
+            "archive.status": { $ne: true },
+            ...(filter.organizationId
+              ? { organizationId: new mongoose.Types.ObjectId(filter.organizationId) }
+              : {}),
+          },
+        },
+        {
+          $lookup: {
+            from: "studentassessmentgrades",
+            let: { sectionId: "$_id", sectionName: "$name", sectionCode: "$code" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$sectionId", "$$sectionId"] },
+                      { $ne: ["$archive.status", true] },
+                      { $in: ["$status", ["submitted", "late"]] },
+                      // Exclude records that already have a score (graded but status not updated)
+                      { $not: { $gt: [{ $ifNull: ["$percentage", 0] }, 0] } },
+                    ],
+                  },
+                },
+              },
+              {
+                $lookup: {
+                  from: "assessments",
+                  localField: "assessmentId",
+                  foreignField: "_id",
+                  as: "assessmentInfo",
+                  pipeline: [{ $project: { title: 1, type: 1 } }],
+                },
+              },
+              {
+                $lookup: {
+                  from: "users",
+                  localField: "studentId",
+                  foreignField: "_id",
+                  as: "studentInfo",
+                  pipeline: [{ $project: { firstName: 1, lastName: 1, avatar: 1 } }],
+                },
+              },
+              {
+                $project: {
+                  _id: 1,
+                  status: 1,
+                  submittedAt: 1,
+                  sectionName: "$$sectionName",
+                  sectionCode: "$$sectionCode",
+                  assessmentTitle: {
+                    $ifNull: [{ $arrayElemAt: ["$assessmentInfo.title", 0] }, "Unknown"],
+                  },
+                  assessmentType: {
+                    $ifNull: [{ $arrayElemAt: ["$assessmentInfo.type", 0] }, ""],
+                  },
+                  studentName: {
+                    $trim: {
+                      input: {
+                        $concat: [
+                          { $ifNull: [{ $arrayElemAt: ["$studentInfo.firstName", 0] }, ""] },
+                          " ",
+                          { $ifNull: [{ $arrayElemAt: ["$studentInfo.lastName", 0] }, ""] },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+            as: "submissions",
+          },
+        },
+        { $unwind: { path: "$submissions", preserveNullAndEmptyArrays: false } },
+        { $replaceRoot: { newRoot: "$submissions" } },
+        { $sort: { submittedAt: -1 } },
+        { $limit: 100 },
+      ] as PipelineStage.FacetPipelineStage[],
+
+      // --- Instructor New Enrollments List ---
+      newEnrollmentsList: [
+        {
+          $match: {
+            instructor: new mongoose.Types.ObjectId(filter.instructorId),
+            "archive.status": { $ne: true },
+            ...(filter.organizationId
+              ? { organizationId: new mongoose.Types.ObjectId(filter.organizationId) }
+              : {}),
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            name: 1,
+            code: 1,
+            students: { $ifNull: ["$students", []] },
+          },
+        },
+        { $unwind: { path: "$students", preserveNullAndEmptyArrays: false } },
+        {
+          $lookup: {
+            from: "users",
+            let: { studentId: "$students", sectionName: "$name", sectionCode: "$code" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$_id", "$$studentId"] },
+                      { $eq: ["$role", "student"] },
+                      { $ne: ["$archive.status", true] },
+                      {
+                        $gte: [
+                          "$createdAt",
+                          filter.date
+                            ? new Date(
+                                new Date(filter.date).getFullYear(),
+                                new Date(filter.date).getMonth(),
+                                1,
+                              )
+                            : {
+                                $dateFromParts: {
+                                  year: { $year: "$$NOW" },
+                                  month: { $month: "$$NOW" },
+                                  day: 1,
+                                },
+                              },
+                        ],
+                      },
+                      {
+                        $lte: [
+                          "$createdAt",
+                          filter.date
+                            ? new Date(new Date(filter.date).setHours(23, 59, 59, 999))
+                            : "$$NOW",
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+              {
+                $project: {
+                  firstName: 1,
+                  lastName: 1,
+                  avatar: 1,
+                  email: 1,
+                  createdAt: 1,
+                },
+              },
+            ],
+            as: "studentInfo",
+          },
+        },
+        { $unwind: { path: "$studentInfo", preserveNullAndEmptyArrays: false } },
+        {
+          $project: {
+            _id: "$studentInfo._id",
+            firstName: "$studentInfo.firstName",
+            lastName: "$studentInfo.lastName",
+            email: "$studentInfo.email",
+            avatar: "$studentInfo.avatar",
+            enrolledAt: "$studentInfo.createdAt",
+            sectionName: "$name",
+            sectionCode: "$code",
+          },
+        },
+        { $sort: { enrolledAt: -1 } },
+        { $limit: 100 },
+      ] as PipelineStage.FacetPipelineStage[],
+
 upComingClassSchedule: [
         // Active lessons (today falls within start–end range)
         {
@@ -3024,31 +3273,35 @@ upComingClassSchedule: [
                     {
                       $gte: [
                         "$$attend.date",
-                        {
-                          $dateFromParts: {
-                            year: { $year: "$$NOW" },
-                            month: { $month: "$$NOW" },
-                            day: { $dayOfMonth: "$$NOW" },
-                          },
-                        },
-                      ],
-                    },
-                    {
-                      $lt: [
-                        "$$attend.date",
-                        {
-                          $dateAdd: {
-                            startDate: {
+                        filter.date
+                          ? new Date(new Date(filter.date).setHours(0, 0, 0, 0))
+                          : {
                               $dateFromParts: {
                                 year: { $year: "$$NOW" },
                                 month: { $month: "$$NOW" },
                                 day: { $dayOfMonth: "$$NOW" },
                               },
                             },
-                            unit: "day",
-                            amount: 1,
-                          },
-                        },
+                      ],
+                    },
+                    {
+                      $lt: [
+                        "$$attend.date",
+                        filter.date
+                          ? new Date(new Date(filter.date).setHours(23, 59, 59, 999))
+                          : {
+                              $dateAdd: {
+                                startDate: {
+                                  $dateFromParts: {
+                                    year: { $year: "$$NOW" },
+                                    month: { $month: "$$NOW" },
+                                    day: { $dayOfMonth: "$$NOW" },
+                                  },
+                                },
+                                unit: "day",
+                                amount: 1,
+                              },
+                            },
                       ],
                     },
                   ],
