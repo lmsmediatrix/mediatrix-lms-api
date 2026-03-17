@@ -672,7 +672,7 @@ async function submitAssessment(data: {
         options: {
           lean: true,
           select:
-            "_id questions totalPoints passingScore endDate dueDate type assessmentNo attemptsAllowed numberOfItems shuffleQuestions numberOfQuestionsToShow organizationId section",
+            "_id questions totalPoints passingScore endDate dueDate type assessmentNo attemptsAllowed numberOfItems shuffleQuestions numberOfQuestionsToShow organizationId section gradeMethod",
           populateArray: [{ path: "section", select: "_id code" }],
         },
       }),
@@ -792,10 +792,15 @@ async function submitAssessment(data: {
         (rawAssessment as any).organizationId || (student as any)?.organizationId;
 
       if (sectionId && organizationId) {
+        const gradeMethod = (rawAssessment as any).gradeMethod;
+        const hasEssayOrManual =
+          gradeMethod === "manual" || gradeMethod === "mixed";
         const percentage =
-          attemptTotalPoints > 0
-            ? Math.round((studentActualScore / attemptTotalPoints) * 10000) / 100
-            : 0;
+          hasEssayOrManual
+            ? 0
+            : attemptTotalPoints > 0
+              ? Math.round((studentActualScore / attemptTotalPoints) * 10000) / 100
+              : 0;
 
         const gradePayload = {
           organizationId,
@@ -1364,6 +1369,61 @@ async function updateStudentAssessmentResult(
       _id: studentId,
       studentAssessmentResults: studentAssessmentResults,
     });
+
+    // IMPORTANT:
+    // Dashboard "Pending Grading" is computed from StudentAssessmentGrade (studentassessmentgrades collection),
+    // not from studentAssessmentResults. When the instructor manually grades (essay/mixed),
+    // we must update the StudentAssessmentGrade record so it exits the pending queue.
+    try {
+      const assessment = await assessmentRepository.getAssessment(assessmentId, {
+        options: {
+          lean: true,
+          select: "_id section organizationId",
+          populateArray: [{ path: "section", select: "_id" }],
+        },
+      });
+
+      const sectionId =
+        assessment && (assessment as any).section && typeof (assessment as any).section === "object"
+          ? (assessment as any).section._id
+          : (assessment as any)?.section;
+      const organizationId = (assessment as any)?.organizationId;
+
+      if (sectionId && organizationId) {
+        const totalPoints = Number(assessmentResult.totalPoints) || 0;
+        const percentage =
+          totalPoints > 0 ? Math.round((totalScore / totalPoints) * 10000) / 100 : 0;
+
+        const existing = await studentAssessmentGradeRepository.searchAndUpdate({
+          studentId: new Types.ObjectId(studentId),
+          assessmentId: new Types.ObjectId(assessmentId),
+          "archive.status": { $ne: true },
+        });
+
+        const updatePayload = {
+          organizationId,
+          sectionId,
+          assessmentId: new Types.ObjectId(assessmentId),
+          studentId: new Types.ObjectId(studentId),
+          score: Number(totalScore) || 0,
+          totalPoints,
+          percentage,
+          status: "graded",
+        };
+
+        if (existing && (existing as any)._id) {
+          await studentAssessmentGradeRepository.searchAndUpdate(
+            { _id: (existing as any)._id },
+            { $set: updatePayload }
+          );
+        } else {
+          await studentAssessmentGradeRepository.createStudentAssessmentGrade(updatePayload as any);
+        }
+      }
+    } catch (_e) {
+      // Non-blocking: student result was saved, but grade sync failed.
+      // We intentionally don't fail the request to avoid losing instructor edits.
+    }
 
     return assessmentResult;
   } catch (error) {

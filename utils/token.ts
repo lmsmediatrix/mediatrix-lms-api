@@ -40,6 +40,7 @@ const generateToken = (user: TokenUser): string => {
       user: {
         id: userId,
         email: user.email,
+        role: user.role,
         firstname: user.firstname,
         lastname: user.lastname,
         avatar: user.avatar,

@@ -1635,7 +1635,7 @@ export const FACET = (filter: any) => {
                       { $eq: ["$sectionId", "$$sectionId"] },
                       { $ne: ["$archive.status", true] },
                       { $in: ["$status", ["submitted", "late"]] },
-                      // Exclude records already scored (status not updated after grading)
+                      // Exclude once instructor has set a score (essay/manual stay at percentage 0 until graded)
                       { $not: { $gt: [{ $ifNull: ["$percentage", 0] }, 0] } },
                       ...(filter.date
                         ? [
@@ -1679,6 +1679,71 @@ export const FACET = (filter: any) => {
             pendingSubmissions: 1,
           },
         },
+      ] as PipelineStage.FacetPipelineStage[],
+
+      // --- Instructor Grading Queue Status Counts (late vs submitted, still pending grading) ---
+      gradingQueueStatusCounts: [
+        {
+          $match: {
+            instructor: new mongoose.Types.ObjectId(filter.instructorId),
+            "archive.status": { $ne: true },
+            ...(filter.organizationId
+              ? { organizationId: new mongoose.Types.ObjectId(filter.organizationId) }
+              : {}),
+          },
+        },
+        {
+          $lookup: {
+            from: "studentassessmentgrades",
+            let: { sectionId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$sectionId", "$$sectionId"] },
+                      { $ne: ["$archive.status", true] },
+                      { $in: ["$status", ["submitted", "late"]] },
+                      // Still pending grading → no final percentage recorded
+                      { $not: { $gt: [{ $ifNull: ["$percentage", 0] }, 0] } },
+                      ...(filter.date
+                        ? [
+                            {
+                              $lte: [
+                                {
+                                  $cond: [
+                                    { $eq: [{ $type: "$submittedAt" }, "date"] },
+                                    "$submittedAt",
+                                    { $toDate: { $ifNull: ["$submittedAt", new Date(0)] } },
+                                  ],
+                                },
+                                new Date(new Date(filter.date).setHours(23, 59, 59, 999)),
+                              ],
+                            },
+                          ]
+                        : []),
+                    ],
+                  },
+                },
+              },
+              { $project: { status: 1 } },
+            ],
+            as: "pendingGrades",
+          },
+        },
+        { $unwind: { path: "$pendingGrades", preserveNullAndEmptyArrays: false } },
+        {
+          $group: {
+            _id: null,
+            late: {
+              $sum: { $cond: [{ $eq: ["$pendingGrades.status", "late"] }, 1, 0] },
+            },
+            submitted: {
+              $sum: { $cond: [{ $eq: ["$pendingGrades.status", "submitted"] }, 1, 0] },
+            },
+          },
+        },
+        { $project: { _id: 0, late: 1, submitted: 1, total: { $add: ["$late", "$submitted"] } } },
       ] as PipelineStage.FacetPipelineStage[],
 
       // --- Instructor Late/Missing Assignments ---
@@ -2018,7 +2083,7 @@ export const FACET = (filter: any) => {
                       { $eq: ["$sectionId", "$$sectionId"] },
                       { $ne: ["$archive.status", true] },
                       { $in: ["$status", ["submitted", "late"]] },
-                      // Exclude records that already have a score (graded but status not updated)
+                      // Exclude once instructor has set a score (essay/manual stay at percentage 0 until graded)
                       { $not: { $gt: [{ $ifNull: ["$percentage", 0] }, 0] } },
                     ],
                   },
@@ -2030,7 +2095,9 @@ export const FACET = (filter: any) => {
                   localField: "assessmentId",
                   foreignField: "_id",
                   as: "assessmentInfo",
-                  pipeline: [{ $project: { title: 1, type: 1 } }],
+                  pipeline: [
+                    { $project: { title: 1, type: 1, endDate: 1, gradeMethod: 1, assessmentNo: 1 } },
+                  ],
                 },
               },
               {
@@ -2043,10 +2110,30 @@ export const FACET = (filter: any) => {
                 },
               },
               {
+                $addFields: {
+                  endDateRaw: { $arrayElemAt: ["$assessmentInfo.endDate", 0] },
+                },
+              },
+              {
+                $addFields: {
+                  dueDate: {
+                    $cond: [
+                      { $eq: [{ $type: "$endDateRaw" }, "date"] },
+                      "$endDateRaw",
+                      { $toDate: { $ifNull: ["$endDateRaw", new Date()] } },
+                    ],
+                  },
+                },
+              },
+              {
                 $project: {
                   _id: 1,
+                  assessmentId: 1,
+                  studentId: 1,
                   status: 1,
                   submittedAt: 1,
+                  percentage: 1,
+                  dueDate: 1,
                   sectionName: "$$sectionName",
                   sectionCode: "$$sectionCode",
                   assessmentTitle: {
@@ -2054,6 +2141,12 @@ export const FACET = (filter: any) => {
                   },
                   assessmentType: {
                     $ifNull: [{ $arrayElemAt: ["$assessmentInfo.type", 0] }, ""],
+                  },
+                  gradeMethod: {
+                    $ifNull: [{ $arrayElemAt: ["$assessmentInfo.gradeMethod", 0] }, "auto"],
+                  },
+                  assessmentNo: {
+                    $ifNull: [{ $arrayElemAt: ["$assessmentInfo.assessmentNo", 0] }, null],
                   },
                   studentName: {
                     $trim: {
@@ -2076,6 +2169,139 @@ export const FACET = (filter: any) => {
         { $replaceRoot: { newRoot: "$submissions" } },
         { $sort: { submittedAt: -1 } },
         { $limit: 100 },
+      ] as PipelineStage.FacetPipelineStage[],
+
+      // --- Instructor Late & Missing Assignments List ---
+      lateMissingList: [
+        {
+          $match: {
+            instructor: new mongoose.Types.ObjectId(filter.instructorId),
+            "archive.status": { $ne: true },
+            ...(filter.organizationId
+              ? { organizationId: new mongoose.Types.ObjectId(filter.organizationId) }
+              : {}),
+          },
+        },
+        {
+          $lookup: {
+            from: "studentassessmentgrades",
+            let: { sectionId: "$_id", sectionName: "$name", sectionCode: "$code" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$sectionId", "$$sectionId"] },
+                      { $ne: ["$archive.status", true] },
+                    ],
+                  },
+                },
+              },
+              {
+                $lookup: {
+                  from: "assessments",
+                  localField: "assessmentId",
+                  foreignField: "_id",
+                  as: "assessmentInfo",
+                  pipeline: [
+                    {
+                      $match: {
+                        "archive.status": { $ne: true },
+                        isDeleted: { $ne: true },
+                      },
+                    },
+                    { $project: { title: 1, endDate: 1, type: 1 } },
+                  ],
+                },
+              },
+              {
+                $lookup: {
+                  from: "users",
+                  localField: "studentId",
+                  foreignField: "_id",
+                  as: "studentInfo",
+                  pipeline: [{ $project: { firstName: 1, lastName: 1, avatar: 1 } }],
+                },
+              },
+              {
+                $addFields: {
+                  endDateRaw: { $arrayElemAt: ["$assessmentInfo.endDate", 0] },
+                  assessmentTitle: {
+                    $ifNull: [{ $arrayElemAt: ["$assessmentInfo.title", 0] }, "Unknown"],
+                  },
+                  assessmentType: {
+                    $ifNull: [{ $arrayElemAt: ["$assessmentInfo.type", 0] }, ""],
+                  },
+                  studentName: {
+                    $trim: {
+                      input: {
+                        $concat: [
+                          { $ifNull: [{ $arrayElemAt: ["$studentInfo.firstName", 0] }, ""] },
+                          " ",
+                          { $ifNull: [{ $arrayElemAt: ["$studentInfo.lastName", 0] }, ""] },
+                        ],
+                      },
+                    },
+                  },
+                  sectionName: "$$sectionName",
+                  sectionCode: "$$sectionCode",
+                },
+              },
+              {
+                $addFields: {
+                  endDateNorm: {
+                    $cond: [
+                      { $eq: [{ $type: "$endDateRaw" }, "date"] },
+                      "$endDateRaw",
+                      { $toDate: { $ifNull: ["$endDateRaw", new Date()] } },
+                    ],
+                  },
+                },
+              },
+              {
+                $addFields: {
+                  classifiedStatus: {
+                    $cond: [
+                      { $eq: ["$status", "late"] },
+                      "late",
+                      {
+                        $cond: [
+                          {
+                            $and: [
+                              { $eq: ["$status", "pending"] },
+                              { $lt: ["$endDateNorm", "$$NOW"] },
+                            ],
+                          },
+                          "missing",
+                          null,
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+              { $match: { classifiedStatus: { $ne: null } } },
+              {
+                $project: {
+                  _id: 1,
+                  studentName: 1,
+                  sectionName: 1,
+                  sectionCode: 1,
+                  assessmentTitle: 1,
+                  assessmentType: 1,
+                  classifiedStatus: 1,
+                  dueDate: "$endDateNorm",
+                  submittedAt: 1,
+                },
+              },
+            ],
+            as: "items",
+          },
+        },
+        { $unwind: { path: "$items", preserveNullAndEmptyArrays: false } },
+        { $replaceRoot: { newRoot: "$items" } },
+        { $sort: { dueDate: 1 } },
+        { $limit: 200 },
       ] as PipelineStage.FacetPipelineStage[],
 
       // --- Instructor New Enrollments List ---
