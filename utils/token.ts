@@ -12,6 +12,7 @@ interface TokenUser {
   lastname?: string;
   avatar?: string;
   isPasswordChanged?: boolean;
+  organizationId?: string;
 }
 
 const generateRefreshToken = (user: TokenUser): string => {
@@ -45,6 +46,7 @@ const generateToken = (user: TokenUser): string => {
         lastname: user.lastname,
         avatar: user.avatar,
         isPasswordChanged: user.isPasswordChanged,
+        organizationId: user.organizationId,
       },
     },
     process.env.ACCESS_TOKEN_SECRET || config.JWTCONFIG.SECRET

@@ -11,6 +11,7 @@ interface DecodedToken {
     email: string;
     firstname?: string;
     lastname?: string;
+    organizationId?: string;
   };
   iat: number;
 }

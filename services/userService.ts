@@ -337,7 +337,7 @@ async function loginUser(credentials: { email: string; password: string }) {
       lastname: user.lastName,
       role: user.role,
       avatar: user.avatar,
-      organization: user.organizationId,
+      organizationId: user.organizationId?.toString(),
       isPasswordChanged: user.isPasswordChanged,
     };
 

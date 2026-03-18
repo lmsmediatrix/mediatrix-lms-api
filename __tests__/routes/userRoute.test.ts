@@ -346,7 +346,7 @@ describe("User Route Handlers", () => {
           lastname: "User",
           role: "student" as const,
           avatar: "avatar-url.jpg",
-          organization: "orgId",
+          organizationId: "orgId",
           isPasswordChanged: false,
         },
         token: "jwt-token-123",

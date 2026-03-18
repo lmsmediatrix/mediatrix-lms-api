@@ -1131,8 +1131,8 @@ export async function loginUser(req: CustomRequest, res: Response) {
           },
           action: "login",
           description: `Successful login by ${result.user.email} (${result.user.firstname || "No first name"} ${result.user.lastname || "No last name"})`,
-          organizationId: result.user.organization
-            ? new mongoose.Types.ObjectId(result.user.organization)
+          organizationId: result.user.organizationId
+            ? new mongoose.Types.ObjectId(result.user.organizationId)
             : undefined,
           entityType: "user",
           createdAt: new Date(),

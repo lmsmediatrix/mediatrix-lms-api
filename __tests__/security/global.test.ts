@@ -41,7 +41,7 @@ interface MockUserResponse {
     lastname: string;
     role: "user" | "superadmin" | "admin" | "instructor" | "employee" | "student" | "viewer";
     avatar: string;
-    organization: string | Types.ObjectId | undefined;
+    organizationId: string | undefined;
     isPasswordChanged: boolean;
   };
   token: string;
@@ -423,7 +423,7 @@ beforeAll(async () => {
       lastname: "User",
       role: "user",
       avatar: "",
-      organization: undefined,
+      organizationId: undefined,
       isPasswordChanged: true,
     },
   });
@@ -996,7 +996,7 @@ describe("Comprehensive Security Test Suite", () => {
               lastname: "User",
               role: "user",
               avatar: "",
-              organization: undefined,
+              organizationId: undefined,
               isPasswordChanged: true,
             },
           };
@@ -1056,7 +1056,7 @@ describe("Comprehensive Security Test Suite", () => {
               lastname: "User",
               role: "user",
               avatar: "",
-              organization: undefined,
+              organizationId: undefined,
               isPasswordChanged: true,
             },
           };
@@ -1166,7 +1166,7 @@ describe("Comprehensive Security Test Suite", () => {
             lastname: "User",
             role: "user",
             avatar: "",
-            organization: undefined,
+            organizationId: undefined,
             isPasswordChanged: true,
           },
         };
