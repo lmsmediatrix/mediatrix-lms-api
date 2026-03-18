@@ -330,6 +330,29 @@ async function loginUser(credentials: { email: string; password: string }) {
       { _id: user._id },
       { $set: { lastActive: currentDate, lastLogin: currentDate } }
     );
+    const rawOrganization = user.organizationId as any;
+    const rawOrganizationId =
+      typeof rawOrganization === "string"
+        ? rawOrganization
+        : rawOrganization?._id?.toString?.() || rawOrganization?.toString?.();
+    const organizationId =
+      typeof rawOrganizationId === "string" && /^[a-fA-F0-9]{24}$/.test(rawOrganizationId)
+        ? rawOrganizationId
+        : undefined;
+    const organization =
+      rawOrganization &&
+      typeof rawOrganization === "object" &&
+      "code" in rawOrganization &&
+      rawOrganization._id
+        ? {
+            _id: rawOrganization._id.toString(),
+            code: rawOrganization.code,
+            name: rawOrganization.name,
+            type: rawOrganization.type,
+            branding: rawOrganization.branding,
+          }
+        : undefined;
+
     const tokenUser = {
       id: user.id,
       email: user.email,
@@ -337,14 +360,17 @@ async function loginUser(credentials: { email: string; password: string }) {
       lastname: user.lastName,
       role: user.role,
       avatar: user.avatar,
-      organizationId: user.organizationId?.toString(),
+      organizationId,
       isPasswordChanged: user.isPasswordChanged,
     };
 
     const token = generateToken(tokenUser);
 
     return {
-      user: tokenUser,
+      user: {
+        ...tokenUser,
+        ...(organization ? { organization } : {}),
+      },
       token,
     };
   } catch (error) {

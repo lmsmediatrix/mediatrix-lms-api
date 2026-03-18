@@ -1117,6 +1117,12 @@ export async function loginUser(req: CustomRequest, res: Response) {
       });
 
       try {
+        const organizationId =
+          typeof result.user.organizationId === "string" &&
+          mongoose.Types.ObjectId.isValid(result.user.organizationId)
+            ? new mongoose.Types.ObjectId(result.user.organizationId)
+            : undefined;
+
         await activityLogService.createActivityLog({
           userId: new mongoose.Types.ObjectId(result.user.id),
           headers: {
@@ -1131,9 +1137,7 @@ export async function loginUser(req: CustomRequest, res: Response) {
           },
           action: "login",
           description: `Successful login by ${result.user.email} (${result.user.firstname || "No first name"} ${result.user.lastname || "No last name"})`,
-          organizationId: result.user.organizationId
-            ? new mongoose.Types.ObjectId(result.user.organizationId)
-            : undefined,
+          organizationId,
           entityType: "user",
           createdAt: new Date(),
         });
