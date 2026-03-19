@@ -1235,7 +1235,10 @@ export async function currentUser(req: CustomRequest, res: Response) {
       });
     }
 
-    return res.status(200).json(user);
+    return res.status(200).json({
+      ...user,
+      token: req.token || undefined,
+    });
   } catch (error) {
     if (error instanceof Error) {
       return res.status(401).json({ error: error.message });
