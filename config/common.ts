@@ -211,7 +211,7 @@ export const config = {
   CORS: {
     METHODS: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     LOCAL: function (origin: string, callback: CallbackFunction) {
-      wildCardOrigin(origin, callback, "http://localhost:5173");
+      wildCardOrigin(origin, callback, "http://localhost:5173", "http://localhost:5181");
     },
     DEV_SITE: function (origin: string, callback: CallbackFunction) {
       wildCardOrigin(
