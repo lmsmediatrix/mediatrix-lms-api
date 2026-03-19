@@ -220,7 +220,8 @@ export const config = {
         "https://lms-app-dev-1f189.web.app",
         "https://lms-app-dev.site",
         "https://mediatrix-lms-app-dev.web.app",
-        "https://mediatrix-lms-app-dev.firebaseapp.com"
+        "https://mediatrix-lms-app-dev.firebaseapp.com",
+        "https://mediatrix-performance-app-dev.web.app"
       );
     },
     TEST_SITE: function (origin: string, callback: CallbackFunction) {
